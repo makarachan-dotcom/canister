@@ -136,8 +136,8 @@ export function CanisterApp() {
     try {
       const direct = await browserResolve({ url, mode, quality });
       if (ticket !== requestRef.current) return;
-      let result = direct && direct.files.length > 0 ? direct : null;
-      if (!result) {
+      let result = direct;
+      if (!result || (result.files.length === 0 && result.platform !== "youtube")) {
         const server = await resolve({ data: { url, mode, quality } });
         if (ticket !== requestRef.current) return;
         if (!server.ok) {
@@ -497,6 +497,7 @@ export function CanisterApp() {
               file={groups.flat().find((item) => item.kind === "video")}
               poster={media.thumbnail}
             />
+            {media.files.length === 0 ? <Alert message={text.emptyVideo} /> : null}
             {groups.length > 1 ? (
               <button
                 type="button"

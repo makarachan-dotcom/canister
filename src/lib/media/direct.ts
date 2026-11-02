@@ -21,15 +21,16 @@ export async function browserResolve(input: {
   const pageUrl = canonicalMediaUrl(input.url);
   const platform = detectPlatform(pageUrl);
   if (!platform) return null;
-  const ladder: Quality[] =
+  const ladder: string[] =
     input.mode === "audio"
-      ? ["1080"]
+      ? ["1080", "720"]
       : input.quality === "480"
-        ? ["480", "720"]
+        ? ["480", "360", "720"]
         : input.quality === "720"
-          ? ["720", "1080"]
-          : ["1080", "720"];
+          ? ["720", "480", "360", "1080"]
+          : ["1080", "720", "480", "360"];
 
+  let fallbackTitle = "";
   for (const quality of ladder) {
     const body = await postDirect(pageUrl, input.mode, quality, platform === "youtube");
     if (!body) continue;
@@ -43,6 +44,8 @@ export async function browserResolve(input: {
     const rawName = safeFilename(body.filename, "video.mp4");
     const resolution = resolutionFromName(rawName);
     const { title, author } = presentName(rawName, platformLabel(platform));
+    fallbackTitle = title;
+    if (!(await fileHasBytes(body.url))) continue;
     const ext = rawName.split(".").pop() || "mp4";
     const filename = safeFilename(`${title}${resolution ? ` (${resolution})` : ""}.${ext}`, rawName);
     const kind = kindFromFilename(filename);
@@ -70,7 +73,31 @@ export async function browserResolve(input: {
       ],
     };
   }
+  if (platform === "youtube" && fallbackTitle) {
+    return {
+      platform,
+      title: fallbackTitle,
+      author: "",
+      pageUrl,
+      thumbnail: youtubeThumb(pageUrl),
+      files: [],
+    };
+  }
   return null;
+}
+
+async function fileHasBytes(url: string): Promise<boolean> {
+  if (!url.includes("/tunnel")) return true;
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    const length = response.headers.get("content-length");
+    const estimated = response.headers.get("estimated-content-length");
+    await response.body?.cancel();
+    if (length === "0" || estimated === "-1") return false;
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 function presentName(filename: string, fallback: string): { title: string; author: string } {
@@ -128,7 +155,7 @@ type DirectBody = {
 async function postDirect(
   url: string,
   mode: FetchMode,
-  quality: Quality,
+  quality: string,
   youtube: boolean,
 ): Promise<DirectBody | null> {
   try {

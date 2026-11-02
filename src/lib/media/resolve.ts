@@ -297,6 +297,12 @@ async function resolveCobalt(input: ResolveInput, platform: Platform): Promise<M
       const marker = (body.filename || "").toLowerCase();
       if (platform === "youtube" && marker.includes(", facebook")) continue;
       if (platform === "facebook" && marker.includes(", youtube")) continue;
+      const primary = media.files[0];
+      if (primary && !(await tunnelHasBytes(primary.url))) {
+        lastCode = "error.api.youtube.empty";
+        lastError = "YouTube did not send the video file. Try again in a moment.";
+        continue;
+      }
       return media;
     }
   }
@@ -315,7 +321,7 @@ async function postCobalt(
   instance: string,
   url: string,
   mode: FetchMode,
-  quality: Quality,
+  quality: string,
   betterAudio: boolean,
 ): Promise<CobaltBody> {
   const response = await fetch(instance, {
@@ -627,12 +633,29 @@ async function resolveFacebookPage(raw: string): Promise<MediaResult | null> {
   return null;
 }
 
-function qualityLadder(quality: Quality, mode: FetchMode): Quality[] {
-  if (mode === "audio") return ["1080"];
-  if (quality === "max") return ["1080", "720"];
-  if (quality === "1080") return ["1080", "720"];
-  if (quality === "720") return ["720", "480"];
-  return ["480"];
+function qualityLadder(quality: Quality, mode: FetchMode): string[] {
+  if (mode === "audio") return ["1080", "720"];
+  if (quality === "max" || quality === "1080") return ["1080", "720", "480", "360"];
+  if (quality === "720") return ["720", "480", "360"];
+  if (quality === "480") return ["480", "360", "720"];
+  return ["480", "360"];
+}
+
+async function tunnelHasBytes(url: string): Promise<boolean> {
+  if (!url.includes("/tunnel")) return true;
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(12000),
+      headers: { "User-Agent": APP_UA },
+    });
+    const length = response.headers.get("content-length");
+    const estimated = response.headers.get("estimated-content-length");
+    await response.body?.cancel();
+    if (length === "0" || estimated === "-1") return false;
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 function humanize(code: string, platform: Platform): string {
