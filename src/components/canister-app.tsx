@@ -449,21 +449,26 @@ export function CanisterApp() {
                 <ArrowLeft className="size-4" aria-hidden />
                 {text.back}
               </button>
-              <button
-                type="button"
-                disabled={phase === "loading"}
-                onClick={() => void pull()}
-                className="press inline-flex h-14 flex-1 items-center justify-center gap-2 rounded-full bg-accent px-5 text-base font-medium text-accent-ink disabled:opacity-60"
-              >
-                {phase === "loading" ? (
-                  <>
-                    <Sprockets />
-                    {statusLine}
-                  </>
-                ) : (
-                  text.find
-                )}
-              </button>
+              <span className="orbit min-w-0 flex-1">
+                <button
+                  type="button"
+                  disabled={phase === "loading"}
+                  onClick={() => void pull()}
+                  className="orbit-btn press inline-flex h-14 w-full items-center justify-center gap-2 rounded-full px-5 text-base font-medium disabled:opacity-60"
+                >
+                  {phase === "loading" ? (
+                    <>
+                      <Sprockets />
+                      {statusLine}
+                    </>
+                  ) : (
+                    <>
+                      <Download className="size-4" aria-hidden />
+                      {text.find}
+                    </>
+                  )}
+                </button>
+              </span>
             </div>
           </section>
         ) : null}
@@ -755,15 +760,17 @@ function GroupCard({
           {selected.bytes ? ` · ~${formatBytes(selected.bytes)}` : ""}
         </p>
         <p className="truncate text-xs text-muted">{selected.filename}</p>
-        <button
-          type="button"
-          onClick={() => onSave(selected)}
-          disabled={busy}
-          className="press inline-flex h-12 items-center justify-center gap-2 rounded-full bg-ink px-5 text-sm font-medium text-surface disabled:opacity-60"
-        >
-          <Download className="size-4" aria-hidden />
-          {busy ? (progress && progress > 0 ? `${copy.saving} ${Math.round(progress * 100)}%` : copy.saving) : action}
-        </button>
+        <span className="orbit">
+          <button
+            type="button"
+            onClick={() => onSave(selected)}
+            disabled={busy}
+            className="orbit-btn press inline-flex h-14 w-full items-center justify-center gap-2 rounded-full px-5 text-base font-medium disabled:opacity-60"
+          >
+            <Download className="size-4" aria-hidden />
+            {busy ? (progress && progress > 0 ? `${copy.saving} ${Math.round(progress * 100)}%` : copy.saving) : action}
+          </button>
+        </span>
       </div>
     </article>
   );
