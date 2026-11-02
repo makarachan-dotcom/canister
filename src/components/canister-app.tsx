@@ -11,14 +11,17 @@ import {
   groupsOf,
   platformLabel,
   unwrapLink,
+  canonicalMediaUrl,
   youtubeId,
+  youtubeThumb,
   type FetchMode,
   type MediaFile,
   type MediaResult,
   type Platform,
   type Quality,
 } from "@/lib/media/model";
-import { resolveLink } from "@/lib/media/resolve";
+import { beginYoutubeLink, resolveLink, tickYoutubeLink } from "@/lib/media/resolve";
+import { youtubeFileQuality } from "@/lib/media/youtube-file";
 import { browserResolve } from "@/lib/media/direct";
 import { saveFile } from "@/lib/media/save";
 
@@ -38,12 +41,15 @@ type Step = 1 | 2 | 3;
 
 export function CanisterApp() {
   const resolve = useServerFn(resolveLink);
+  const beginYoutube = useServerFn(beginYoutubeLink);
+  const tickYoutube = useServerFn(tickYoutubeLink);
   const [lang, setLang] = useState<Lang>("km");
   const [raw, setRaw] = useState("");
   const [mode, setMode] = useState<FetchMode>("video");
   const [quality, setQuality] = useState<Quality>("1080");
   const [step, setStep] = useState<Step>(1);
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState("");
   const [media, setMedia] = useState<MediaResult | null>(null);
   const [picked, setPicked] = useState<Record<string, string>>({});
@@ -54,6 +60,9 @@ export function CanisterApp() {
   const [resolvedFor, setResolvedFor] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const requestRef = useRef(0);
+  const warmRef = useRef(0);
+  const jobRef = useRef<{ key: string; id: string; pk: string } | null>(null);
+  const readyRef = useRef<{ key: string; media: MediaResult } | null>(null);
   const text = COPY[lang];
   const platform = detectPlatform(raw);
 
@@ -73,6 +82,111 @@ export function CanisterApp() {
   useEffect(() => {
     document.documentElement.lang = lang === "km" ? "km" : "en";
   }, [lang]);
+
+  function fileKey(url: string, nextQuality: Quality) {
+    return `${canonicalMediaUrl(url)}|${youtubeFileQuality(nextQuality)}`;
+  }
+
+  function primeYoutube(url: string, nextQuality: Quality) {
+    const pageUrl = canonicalMediaUrl(url);
+    const key = fileKey(pageUrl, nextQuality);
+    if (readyRef.current?.key === key || jobRef.current?.key === key) return;
+    const warm = ++warmRef.current;
+    jobRef.current = { key, id: "", pk: "" };
+    void (async () => {
+      try {
+        const started = await beginYoutube({ data: { url: pageUrl, quality: nextQuality } });
+        if (warm !== warmRef.current) return;
+        if (!started.ok) {
+          if (jobRef.current?.key === key) jobRef.current = null;
+          return;
+        }
+        let pk = started.pk;
+        jobRef.current = { key, id: started.id, pk };
+        for (let attempt = 0; attempt < 80; attempt += 1) {
+          if (warm !== warmRef.current) return;
+          await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 350 : 650));
+          if (warm !== warmRef.current) return;
+          const tick = await tickYoutube({ data: { pageUrl, quality: nextQuality, id: started.id, pk } });
+          if (warm !== warmRef.current) return;
+          if (tick.state === "wait" && tick.pk) {
+            pk = tick.pk;
+            jobRef.current = { key, id: started.id, pk };
+          }
+          if (tick.state === "wait" && tick.title) {
+            setMedia((current) =>
+              current && current.files.length === 0 && current.pageUrl === pageUrl
+                ? { ...current, title: tick.title }
+                : current,
+            );
+          }
+          if (tick.state === "ready") {
+            readyRef.current = { key, media: tick.media };
+            return;
+          }
+          if (tick.state === "fail") {
+            if (jobRef.current?.key === key) jobRef.current = null;
+            return;
+          }
+        }
+        if (jobRef.current?.key === key) jobRef.current = null;
+      } catch {
+        if (warm === warmRef.current && jobRef.current?.key === key) jobRef.current = null;
+      }
+    })();
+  }
+
+  function waitForFile(key: string, ticket: number): Promise<MediaResult | null> {
+    const started = Date.now();
+    return new Promise((resolve) => {
+      const timer = setInterval(() => {
+        if (ticket !== requestRef.current) {
+          clearInterval(timer);
+          resolve(null);
+          return;
+        }
+        const found = readyRef.current;
+        if (found?.key === key) {
+          clearInterval(timer);
+          resolve(found.media);
+          return;
+        }
+        const pending = jobRef.current?.key === key;
+        if (!pending && Date.now() - started > 5000) {
+          clearInterval(timer);
+          resolve(null);
+          return;
+        }
+        if (Date.now() - started > 80000) {
+          clearInterval(timer);
+          resolve(null);
+        }
+      }, 300);
+    });
+  }
+
+  async function loadTitle(pageUrl: string, ticket: number) {
+    try {
+      const response = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(pageUrl)}`);
+      if (!response.ok || ticket !== requestRef.current) return;
+      const json = (await response.json()) as { title?: string; author_name?: string };
+      if (!json.title || ticket !== requestRef.current) return;
+      setMedia((current) =>
+        current && current.files.length === 0 && current.pageUrl === pageUrl
+          ? { ...current, title: json.title || current.title, author: json.author_name || "" }
+          : current,
+      );
+    } catch {
+      /* the file title arrives with the download */
+    }
+  }
+
+  useEffect(() => {
+    if (step !== 2 || mode !== "video") return;
+    const url = unwrapLink(raw);
+    if (detectPlatform(url) !== "youtube") return;
+    primeYoutube(url, quality);
+  }, [step, mode, raw, quality]);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -132,32 +246,76 @@ export function CanisterApp() {
     setPhase("loading");
     setError("");
     setSaveNote("");
-    setMedia(null);
     try {
       const platform = detectPlatform(url);
+      if (platform === "youtube" && mode === "video") {
+        const pageUrl = canonicalMediaUrl(url);
+        const key = fileKey(pageUrl, quality);
+        const already = readyRef.current?.key === key ? readyRef.current.media : null;
+        if (already && already.files.length > 0) {
+          setMedia(already);
+          setRaw(pageUrl);
+          setResolvedFor(pageUrl);
+          setPreparing(false);
+          const initial: Record<string, string> = {};
+          for (const group of groupsOf(already.files)) {
+            if (group[0]) initial[group[0].groupId] = group[0].id;
+          }
+          setPicked(initial);
+          setPhase("ready");
+          setStep(3);
+          remember(already, pageUrl);
+          return;
+        }
+        setMedia({
+          platform: "youtube",
+          title: "YouTube",
+          author: "",
+          pageUrl,
+          thumbnail: youtubeThumb(pageUrl),
+          files: [],
+        });
+        setRaw(pageUrl);
+        setResolvedFor(pageUrl);
+        setPreparing(true);
+        setPhase("ready");
+        setStep(3);
+        void loadTitle(pageUrl, ticket);
+        if (readyRef.current?.key !== key && jobRef.current?.key !== key) primeYoutube(pageUrl, quality);
+        const ready = await waitForFile(key, ticket);
+        if (ticket !== requestRef.current) return;
+        if (!ready || ready.files.length === 0) {
+          setPreparing(false);
+          setPhase("error");
+          setError(text.emptyVideo);
+          return;
+        }
+        setMedia(ready);
+        setPreparing(false);
+        const initial: Record<string, string> = {};
+        for (const group of groupsOf(ready.files)) {
+          if (group[0]) initial[group[0].groupId] = group[0].id;
+        }
+        setPicked(initial);
+        setPhase("ready");
+        remember(ready, pageUrl);
+        return;
+      }
+      setMedia(null);
       let result: MediaResult | null = null;
-      if (platform === "youtube") {
+      const direct = await browserResolve({ url, mode, quality });
+      if (ticket !== requestRef.current) return;
+      result = direct;
+      if (!result || result.files.length === 0) {
         const server = await resolve({ data: { url, mode, quality } });
         if (ticket !== requestRef.current) return;
-        if (server.ok && server.media.files.length > 0) result = server.media;
-      }
-      if (!result) {
-        const direct = await browserResolve({ url, mode, quality });
-        if (ticket !== requestRef.current) return;
-        result = direct;
-        if (!result || result.files.length === 0) {
-          if (platform !== "youtube") {
-            const server = await resolve({ data: { url, mode, quality } });
-            if (ticket !== requestRef.current) return;
-            if (!server.ok) {
-              setPhase("error");
-              setError(explainError(server.error, text));
-              setStep(2);
-              return;
-            }
-            result = server.media;
-          }
+        if (!server.ok) {
+          setPhase("error");
+          setError(explainError(server.error, text));
+          setStep(2);
+          return;
         }
+        result = server.media;
       }
       if (!result || result.files.length === 0) {
         setPhase("error");
@@ -233,11 +391,15 @@ export function CanisterApp() {
   function startFresh() {
     abortRef.current?.abort();
     requestRef.current += 1;
+    warmRef.current += 1;
+    jobRef.current = null;
+    readyRef.current = null;
     setRaw("");
     setMedia(null);
     setResolvedFor("");
     setError("");
     setSaveNote("");
+    setPreparing(false);
     setPhase("idle");
     setStep(1);
     setMode("video");
@@ -519,8 +681,20 @@ export function CanisterApp() {
               file={groups.flat().find((item) => item.kind === "video")}
               poster={media.thumbnail}
             />
-            {media.files.length === 0 ? <Alert message={text.emptyVideo} /> : null}
-            {groups.length > 1 ? (
+            {preparing ? (
+              <span className="orbit mt-5 block">
+                <button
+                  type="button"
+                  disabled
+                  className="orbit-btn inline-flex h-14 w-full items-center justify-center gap-2 rounded-full px-5 text-base font-medium"
+                >
+                  <Sprockets />
+                  {text.pulling}
+                </button>
+              </span>
+            ) : null}
+            {!preparing && media.files.length === 0 ? <Alert message={error || text.emptyVideo} /> : null}
+            {!preparing && groups.length > 1 ? (
               <button
                 type="button"
                 disabled={savingId !== null}
@@ -531,6 +705,7 @@ export function CanisterApp() {
                 {text.saveAll(groups.length)}
               </button>
             ) : null}
+            {!preparing ? (
             <div className="mt-5 flex flex-col gap-6">
               {groups.map((group, index) => (
                 <GroupCard
@@ -553,6 +728,7 @@ export function CanisterApp() {
                 />
               ))}
             </div>
+            ) : null}
             {saveNote ? <p className="fade-in mt-4 text-sm leading-relaxed text-muted">{saveNote}</p> : null}
             <button
               type="button"

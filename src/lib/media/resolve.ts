@@ -22,7 +22,7 @@ import {
   type ResolveInput,
   type ResolveResponse,
 } from "@/lib/media/model";
-import { youtubeVideoFile } from "@/lib/media/youtube-file";
+import { openYoutubeJob, tickYoutubeJob, youtubeVideoFile } from "@/lib/media/youtube-file";
 
 const APP_UA = "Canister/1.0 (public media fetch)";
 const BROWSER_UA =
@@ -65,6 +65,32 @@ export const resolveLink = createServerFn({ method: "POST" })
       return { ok: false, error: message };
     }
   });
+
+export const beginYoutubeLink = createServerFn({ method: "POST" })
+  .validator((data: unknown): { url: string; quality: Quality } => {
+    if (!data || typeof data !== "object") throw new Error("Paste a link first.");
+    const record = data as Record<string, unknown>;
+    const url = typeof record.url === "string" ? canonicalMediaUrl(extractUrl(record.url)) : "";
+    if (!url || detectPlatform(url) !== "youtube") throw new Error("Paste a public YouTube link.");
+    return { url, quality: normalizeQuality(record.quality) };
+  })
+  .handler(async ({ data }) => {
+    const job = await openYoutubeJob(data.url, data.quality);
+    if (!job) return { ok: false as const, error: "Couldn't start that video." };
+    return { ok: true as const, id: job.id, pk: job.pk, pageUrl: data.url, title: job.title };
+  });
+
+export const tickYoutubeLink = createServerFn({ method: "POST" })
+  .validator((data: unknown): { pageUrl: string; quality: Quality; id: string; pk: string } => {
+    if (!data || typeof data !== "object") throw new Error("Paste a link first.");
+    const record = data as Record<string, unknown>;
+    const pageUrl = typeof record.pageUrl === "string" ? record.pageUrl : "";
+    const id = typeof record.id === "string" ? record.id : "";
+    const pk = typeof record.pk === "string" ? record.pk : "";
+    if (!pageUrl || !id) throw new Error("Paste a link first.");
+    return { pageUrl, quality: normalizeQuality(record.quality), id, pk };
+  })
+  .handler(async ({ data }) => tickYoutubeJob(data.pageUrl, data.quality, data.id, data.pk));
 
 async function resolveMedia(input: ResolveInput): Promise<MediaResult> {
   const pageUrl = canonicalMediaUrl(await canonicalPage(input.url));
