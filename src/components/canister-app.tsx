@@ -103,6 +103,10 @@ export function CanisterApp() {
         }
         let pk = started.pk;
         jobRef.current = { key, id: started.id, pk };
+        if (started.media && started.media.files.length > 0) {
+          readyRef.current = { key, media: started.media };
+          return;
+        }
         for (let attempt = 0; attempt < 80; attempt += 1) {
           if (warm !== warmRef.current) return;
           await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 350 : 650));
@@ -954,15 +958,28 @@ function GroupCard({
         </p>
         <p className="truncate text-xs text-muted">{selected.filename}</p>
         <span className="orbit">
-          <button
-            type="button"
-            onClick={() => onSave(selected)}
-            disabled={busy}
-            className="orbit-btn press inline-flex h-14 w-full items-center justify-center gap-2 rounded-full px-5 text-base font-medium disabled:opacity-60"
-          >
-            <Download className="size-4" aria-hidden />
-            {busy ? (progress && progress > 0 ? `${copy.saving} ${Math.round(progress * 100)}%` : copy.saving) : action}
-          </button>
+          {selected.save === "navigate" ? (
+            <a
+              href={selected.url}
+              download={selected.filename}
+              target="_blank"
+              rel="noopener"
+              className="orbit-btn press inline-flex h-14 w-full items-center justify-center gap-2 rounded-full px-5 text-base font-medium"
+            >
+              <Download className="size-4" aria-hidden />
+              {action}
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onSave(selected)}
+              disabled={busy}
+              className="orbit-btn press inline-flex h-14 w-full items-center justify-center gap-2 rounded-full px-5 text-base font-medium disabled:opacity-60"
+            >
+              <Download className="size-4" aria-hidden />
+              {busy ? (progress && progress > 0 ? `${copy.saving} ${Math.round(progress * 100)}%` : copy.saving) : action}
+            </button>
+          )}
         </span>
       </div>
     </article>

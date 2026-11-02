@@ -77,7 +77,14 @@ export const beginYoutubeLink = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const job = await openYoutubeJob(data.url, data.quality);
     if (!job) return { ok: false as const, error: "Couldn't start that video." };
-    return { ok: true as const, id: job.id, pk: job.pk, pageUrl: data.url, title: job.title };
+    return {
+      ok: true as const,
+      id: job.id,
+      pk: job.pk,
+      pageUrl: data.url,
+      title: job.title,
+      media: job.media,
+    };
   });
 
 export const tickYoutubeLink = createServerFn({ method: "POST" })

@@ -2,7 +2,7 @@ import { safeFilename, youtubeThumb, type MediaResult, type Quality } from "@/li
 
 const FILE_API = "https://api5.apiapi2.lat";
 
-export type YoutubeJob = { id: string; pk: string; title: string };
+export type YoutubeJob = { id: string; pk: string; title: string; media: MediaResult | null };
 
 export type YoutubeTick =
   | { state: "wait"; title: string; pk: string }
@@ -35,16 +35,17 @@ async function postJson(url: string, body: unknown): Promise<Job | null> {
   try {
     const response = await fetch(url, {
       method: "POST",
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(15000),
       headers: {
+        Accept: "application/json",
         "Content-Type": "application/json",
-        Origin: "https://y2mate.ws",
-        Referer: "https://y2mate.ws/",
+        "User-Agent": "Mozilla/5.0",
       },
       body: JSON.stringify(body),
     });
+    const text = await response.text();
     if (!response.ok) return null;
-    const json: unknown = await response.json();
+    const json: unknown = JSON.parse(text);
     if (!json || typeof json !== "object") return null;
     return json as Job;
   } catch {
@@ -53,7 +54,7 @@ async function postJson(url: string, body: unknown): Promise<Job | null> {
 }
 
 function asMedia(pageUrl: string, quality: "360" | "720", id: string, pk: string, title: string): MediaResult {
-  const safeTitle = title || "YouTube video";
+  const safeTitle = title.trim() || "YouTube video";
   const downloadUrl = `${FILE_API}/${ranHash()}/download/${id}/${ranHash()}/${pk ? `${pk}/` : ""}`;
   return {
     platform: "youtube",
@@ -89,8 +90,16 @@ export async function openYoutubeJob(pageUrl: string, quality: Quality): Promise
     mp4Quality: chosen,
     userTimeZone: "-420",
   });
-  if (!init?.i) return null;
-  return { id: init.i, pk: init.pk ? String(init.pk) : "", title: typeof init.t === "string" ? init.t.trim() : "" };
+  if (!init?.i || init.e) return null;
+  const pk = init.pk ? String(init.pk) : "";
+  const title = typeof init.t === "string" ? init.t.trim() : "";
+  const done = String(init.s || "").toUpperCase() === "C";
+  return {
+    id: init.i,
+    pk,
+    title,
+    media: done ? asMedia(pageUrl, chosen, init.i, pk, title) : null,
+  };
 }
 
 export async function tickYoutubeJob(pageUrl: string, quality: Quality, id: string, pk: string): Promise<YoutubeTick> {
@@ -99,26 +108,28 @@ export async function tickYoutubeJob(pageUrl: string, quality: Quality, id: stri
   if (!status) return { state: "wait", title: "", pk };
   const nextPk = status.pk ? String(status.pk) : pk;
   const title = typeof status.t === "string" ? status.t.trim() : "";
-  if (status.e || (status.s && status.s !== "P" && status.s !== "C")) return { state: "fail" };
-  if (status.s === "C") return { state: "ready", media: asMedia(pageUrl, chosen, id, nextPk, title) };
+  const state = String(status.s || "").toUpperCase();
+  if (status.e || (state && state !== "P" && state !== "C")) return { state: "fail" };
+  if (state === "C") return { state: "ready", media: asMedia(pageUrl, chosen, id, nextPk, title) };
   return { state: "wait", title, pk: nextPk };
 }
 
 export async function youtubeVideoFile(pageUrl: string, quality: Quality): Promise<MediaResult | null> {
   const opened = await openYoutubeJob(pageUrl, quality);
   if (!opened) return null;
+  if (opened.media) return opened.media;
   let pk = opened.pk;
   let title = opened.title;
-  for (let attempt = 0; attempt < 70; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 400 : 700));
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 500 : 1500));
     const tick = await tickYoutubeJob(pageUrl, quality, opened.id, pk);
     if (tick.state === "fail") return null;
     if (tick.state === "ready") {
       if (title && tick.media.title === "YouTube video") tick.media.title = title;
       return tick.media;
     }
-    if (tick.state === "wait" && tick.pk) pk = tick.pk;
-    if (tick.state === "wait" && tick.title) title = tick.title;
+    if (tick.pk) pk = tick.pk;
+    if (tick.title) title = tick.title;
   }
   return null;
 }
