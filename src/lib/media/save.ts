@@ -8,7 +8,7 @@ export async function saveFile(
   signal: AbortSignal,
 ): Promise<"saved" | "opened"> {
   if (file.save === "navigate") {
-    triggerAnchor(file.url, file.filename, false);
+    triggerAnchor(file.url, file.filename, true);
     return "opened";
   }
 

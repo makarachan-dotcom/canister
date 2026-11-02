@@ -22,6 +22,7 @@ import {
   type ResolveInput,
   type ResolveResponse,
 } from "@/lib/media/model";
+import { youtubeVideoFile } from "@/lib/media/youtube-file";
 
 const APP_UA = "Canister/1.0 (public media fetch)";
 const BROWSER_UA =
@@ -74,6 +75,11 @@ async function resolveMedia(input: ResolveInput): Promise<MediaResult> {
 async function resolveScoped(input: ResolveInput): Promise<MediaResult> {
   const platform = detectPlatform(input.url);
   if (!platform) throw new Error("Paste a public link. Private addresses are skipped.");
+
+  if (platform === "youtube" && input.mode === "video") {
+    const file = await youtubeVideoFile(input.url, input.quality);
+    if (file && file.files.length > 0) return file;
+  }
 
   if (platform === "x" && input.mode === "video") {
     const direct = await resolveX(input.url);

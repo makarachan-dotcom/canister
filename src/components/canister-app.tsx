@@ -134,19 +134,36 @@ export function CanisterApp() {
     setSaveNote("");
     setMedia(null);
     try {
-      const direct = await browserResolve({ url, mode, quality });
-      if (ticket !== requestRef.current) return;
-      let result = direct;
-      if (!result || (result.files.length === 0 && result.platform !== "youtube")) {
+      const platform = detectPlatform(url);
+      let result: MediaResult | null = null;
+      if (platform === "youtube") {
         const server = await resolve({ data: { url, mode, quality } });
         if (ticket !== requestRef.current) return;
-        if (!server.ok) {
-          setPhase("error");
-          setError(explainError(server.error, text));
-          setStep(2);
-          return;
+        if (server.ok && server.media.files.length > 0) result = server.media;
+      }
+      if (!result) {
+        const direct = await browserResolve({ url, mode, quality });
+        if (ticket !== requestRef.current) return;
+        result = direct;
+        if (!result || result.files.length === 0) {
+          if (platform !== "youtube") {
+            const server = await resolve({ data: { url, mode, quality } });
+            if (ticket !== requestRef.current) return;
+            if (!server.ok) {
+              setPhase("error");
+              setError(explainError(server.error, text));
+              setStep(2);
+              return;
+            }
+            result = server.media;
+          }
         }
-        result = server.media;
+      }
+      if (!result || result.files.length === 0) {
+        setPhase("error");
+        setError(text.emptyVideo);
+        setStep(2);
+        return;
       }
       const shown = result.pageUrl || url;
       setMedia(result);
